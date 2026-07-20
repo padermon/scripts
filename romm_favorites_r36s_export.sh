@@ -530,7 +530,7 @@ for gamefile in "$GAMEDIR"/*.games; do
     log "[dry-run] write $target ($count games)"
   else
     mkdir -p "$OUTPUT/$system"
-    { printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<gameList>'; LC_ALL=C sed 's/[^[:print:]\t]//g' "$gamefile"; printf '%s\n' '</gameList>'; } > "$target"
+    { printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<gameList>'; LC_ALL=C tr -d '\000-\010\013\014\016-\037' < "$gamefile"; printf '%s\n' '</gameList>'; } > "$target"
   fi
 done
 
