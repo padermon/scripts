@@ -1,12 +1,16 @@
-# RomM Favorites Export for R36S
+# RomM Favorites and Collections Export for R36S
 
-A dependency-free macOS Bash script that exports favorite games from a [RomM](https://github.com/rommapp/romm) instance into an R36S, ArkOS, and EmulationStation-compatible directory structure.
+A dependency-free macOS Bash script that exports favorite games or selected
+collections from a [RomM](https://github.com/rommapp/romm) instance into an
+R36S, ArkOS, and EmulationStation-compatible directory structure.
 
 The script creates a `gamelist.xml` for each system and can optionally download ROM files, covers, marquees, and videos.
 
 ## Features
 
-- Exports only games marked as favorites in RomM
+- Exports games marked as favorites in RomM by default
+- Exports one or more named collections or collection IDs
+- Deduplicates games that occur in multiple selected collections
 - Maps common RomM platform slugs to ArkOS system directories
 - Downloads ROM files and all available RomM media
 - Creates EmulationStation-compatible `gamelist.xml` files
@@ -55,6 +59,43 @@ Export directly to a mounted EASYROMS partition:
   --download-roms \
   --download-media
 ```
+
+Export one or more RomM collections by their exact names:
+
+```bash
+./romm_favorites_r36s_export.sh \
+  --romm https://romm.example.com \
+  --username YOUR_USERNAME \
+  --output /Volumes/EASYROMS \
+  --collection "SNES Top 50 Deutschland" \
+  --collection "NES Top 50 Deutschland" \
+  --collection "GBA Top 50 Deutschland" \
+  --collection "GB Top 50 Deutschland" \
+  --collection "GBC Top 50 Deutschland" \
+  --download-roms \
+  --download-media
+```
+
+`--collection` is repeatable. Names are matched exactly without regard to
+letter case. Unknown or ambiguous names stop the export instead of silently
+exporting the wrong collection.
+
+Collections can also be selected directly by ID:
+
+```bash
+./romm_favorites_r36s_export.sh \
+  --romm https://romm.example.com \
+  --username YOUR_USERNAME \
+  --output ./r36s-export \
+  --collection-id 2 \
+  --collection-id 3 \
+  --download-roms \
+  --download-media
+```
+
+When at least one `--collection` or `--collection-id` option is supplied, only
+the selected collections are exported. Without either option, the script keeps
+its original behavior and exports RomM favorites.
 
 ## Authentication
 
@@ -175,9 +216,10 @@ Depending on the metadata available in RomM, each `gamelist.xml` entry can conta
 - Developer and publisher
 - Genre and player count
 
-The RomM favorite flag is used only to select which games are exported. The
-exporter deliberately does not write `<favorite>true</favorite>` to the target
-`gamelist.xml`, so favorites can be managed independently on the handheld.
+The RomM favorite flag or selected collections are used only to select which
+games are exported. The exporter deliberately does not write
+`<favorite>true</favorite>` to the target `gamelist.xml`, so favorites can be
+managed independently on the handheld.
 
 ## Options
 
@@ -186,6 +228,8 @@ exporter deliberately does not write `<favorite>true</favorite>` to the target
 --username USER     RomM username, required
 --password PASS     Password; use the prompt or ROMM_PASSWORD instead when possible
 --output PATH       Output directory, required
+--collection NAME   Export a collection by exact name; repeatable
+--collection-id ID  Export a collection by numeric ID; repeatable
 --download-roms     Download ROM files
 --download-media    Download all available RomM media
 --dry-run           Show planned actions without writing to the output directory

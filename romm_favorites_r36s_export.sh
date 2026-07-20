@@ -12,6 +12,10 @@ OUTPUT=""
 DOWNLOAD_ROMS=0
 DOWNLOAD_MEDIA=0
 DRY_RUN=0
+COLLECTION_NAMES=()
+COLLECTION_IDS=()
+COLLECTION_NAME_COUNT=0
+COLLECTION_ID_COUNT=0
 
 usage() {
   cat <<'EOF'
@@ -23,6 +27,8 @@ Optionen:
   --username USER     RomM Benutzername (erforderlich)
   --password PASS     Passwort; sicherer: ROMM_PASSWORD oder Eingabe-Prompt
   --output PFAD       Zielordner, z.B. ./r36s-export oder /Volumes/EASYROMS
+  --collection NAME   RomM Collection exportieren; mehrfach verwendbar
+  --collection-id ID  RomM Collection per ID exportieren; mehrfach verwendbar
   --download-roms     ROM-Dateien herunterladen
   --download-media    Alle verfuegbaren RomM-Medien herunterladen
   --dry-run           Nichts ins Ziel schreiben, nur Aktionen anzeigen
@@ -39,6 +45,8 @@ while [ "$#" -gt 0 ]; do
     --username) [ "$#" -ge 2 ] || fail "Wert fuer --username fehlt"; USERNAME=$2; shift 2 ;;
     --password) [ "$#" -ge 2 ] || fail "Wert fuer --password fehlt"; PASSWORD=$2; shift 2 ;;
     --output) [ "$#" -ge 2 ] || fail "Wert fuer --output fehlt"; OUTPUT=$2; shift 2 ;;
+    --collection) [ "$#" -ge 2 ] || fail "Wert fuer --collection fehlt"; COLLECTION_NAMES+=("$2"); COLLECTION_NAME_COUNT=$((COLLECTION_NAME_COUNT + 1)); shift 2 ;;
+    --collection-id) [ "$#" -ge 2 ] || fail "Wert fuer --collection-id fehlt"; case "$2" in ''|*[!0-9]*) fail "Ungueltige Collection-ID: $2" ;; esac; COLLECTION_IDS+=("$2"); COLLECTION_ID_COUNT=$((COLLECTION_ID_COUNT + 1)); shift 2 ;;
     --download-roms) DOWNLOAD_ROMS=1; shift ;;
     --download-media) DOWNLOAD_MEDIA=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -226,6 +234,21 @@ function run(argv) {
     write(argv[3],out.join('\n')+'\n');
     return '';
   }
+  if (mode === 'collections') {
+    var collections=JSON.parse(text(argv[1]));
+    if (!Array.isArray(collections)) collections=collections.items || collections.results || [];
+    var ids=[], seen={};
+    argv.slice(3).forEach(function(requested) {
+      var key=String(requested).toLocaleLowerCase();
+      var matches=collections.filter(function(c){ return String(c.name || '').toLocaleLowerCase() === key; });
+      if (!matches.length) throw Error('Collection nicht gefunden: ' + requested);
+      if (matches.length > 1) throw Error('Collection-Name ist mehrdeutig: ' + requested);
+      var id=String(matches[0].id);
+      if (!seen[id]) { ids.push(id); seen[id]=true; }
+    });
+    write(argv[2],ids.join('\n')+(ids.length?'\n':''));
+    return '';
+  }
   throw Error('Unbekannter Modus: '+mode);
 }
 JXA
@@ -290,40 +313,86 @@ download() {
 }
 
 LOGIN_JSON="$TMPDIR_EXPORT/login.json"
+LOGIN_SCOPE='roms.read assets.read'
+[ "$COLLECTION_NAME_COUNT" -eq 0 ] && [ "$COLLECTION_ID_COUNT" -eq 0 ] || LOGIN_SCOPE="$LOGIN_SCOPE collections.read"
 LOGIN_CODE=$(curl --silent --show-error --output "$LOGIN_JSON" --write-out '%{http_code}' \
   --connect-timeout 30 --max-time 60 --request POST "$ROMM/api/token" \
   --data-urlencode 'grant_type=password' \
-  --data-urlencode 'scope=roms.read assets.read' \
+  --data-urlencode "scope=$LOGIN_SCOPE" \
   --data-urlencode "username=$USERNAME" \
   --data-urlencode "password=$PASSWORD") || fail "Login-Anfrage fehlgeschlagen"
 case "$LOGIN_CODE" in 2??) ;; *) fail "Login fehlgeschlagen: HTTP $LOGIN_CODE: $(LC_ALL=C cut -c 1-700 "$LOGIN_JSON")" ;; esac
 TOKEN=$(osascript -l JavaScript "$JS_HELPER" token "$LOGIN_JSON" 2>&1) || fail "Login-Antwort ungueltig: $TOKEN"
 
 log "Login bei RomM erfolgreich."
-log "Lade Favorites..."
 MANIFEST="$TMPDIR_EXPORT/manifest.tsv"
 : > "$MANIFEST"
-offset=0
 limit=100
-total=0
-while :; do
-  PAGE_JSON="$TMPDIR_EXPORT/page-$offset.json"
-  PAGE_TSV="$TMPDIR_EXPORT/page-$offset.tsv"
-  API_URL="$ROMM/api/roms?favorite=true&with_files=true&with_char_index=false&with_filter_values=false&with_rom_id_index=false&limit=$limit&offset=$offset&order_by=name&order_dir=asc"
-  CODE=$(curl --silent --show-error --output "$PAGE_JSON" --write-out '%{http_code}' \
-    --connect-timeout 30 --max-time 120 -H "Authorization: Bearer $TOKEN" "$API_URL") || fail "Favorites konnten nicht geladen werden"
-  case "$CODE" in 2??) ;; *) fail "Favorites abrufen fehlgeschlagen: HTTP $CODE: $(LC_ALL=C cut -c 1-700 "$PAGE_JSON")" ;; esac
-  osascript -l JavaScript "$JS_HELPER" page "$PAGE_JSON" "$ROMM" "$PAGE_TSV" >/dev/null || fail "Favorites-Antwort ist ungueltig"
-  meta=$(LC_ALL=C sed -n '1p' "$PAGE_TSV")
-  oldIFS=$IFS; IFS="$(printf '\t')"; set -- $meta; IFS=$oldIFS
-  total=$2; page_count=$3
-  LC_ALL=C sed '1d' "$PAGE_TSV" >> "$MANIFEST"
-  offset=$((offset + page_count))
-  log "Favorites geladen: $offset/$total"
-  [ "$page_count" -gt 0 ] || break
-  [ "$offset" -lt "$total" ] || break
-done
-log "Gefunden: $offset Favorites"
+
+load_source() {
+  source_query=$1; source_label=$2; source_number=$3
+  offset=0; total=0
+  while :; do
+    PAGE_JSON="$TMPDIR_EXPORT/page-$source_number-$offset.json"
+    PAGE_TSV="$TMPDIR_EXPORT/page-$source_number-$offset.tsv"
+    API_URL="$ROMM/api/roms?$source_query&with_files=true&with_char_index=false&with_filter_values=false&with_rom_id_index=false&limit=$limit&offset=$offset&order_by=name&order_dir=asc"
+    CODE=$(curl --silent --show-error --output "$PAGE_JSON" --write-out '%{http_code}' \
+      --connect-timeout 30 --max-time 120 -H "Authorization: Bearer $TOKEN" "$API_URL") || fail "$source_label konnte nicht geladen werden"
+    case "$CODE" in 2??) ;; *) fail "$source_label abrufen fehlgeschlagen: HTTP $CODE: $(LC_ALL=C cut -c 1-700 "$PAGE_JSON")" ;; esac
+    osascript -l JavaScript "$JS_HELPER" page "$PAGE_JSON" "$ROMM" "$PAGE_TSV" >/dev/null || fail "$source_label-Antwort ist ungueltig"
+    meta=$(LC_ALL=C sed -n '1p' "$PAGE_TSV")
+    oldIFS=$IFS; IFS="$(printf '\t')"; set -- $meta; IFS=$oldIFS
+    total=$2; page_count=$3
+    LC_ALL=C sed '1d' "$PAGE_TSV" >> "$MANIFEST"
+    offset=$((offset + page_count))
+    log "$source_label geladen: $offset/$total"
+    [ "$page_count" -gt 0 ] || break
+    [ "$offset" -lt "$total" ] || break
+  done
+}
+
+if [ "$COLLECTION_NAME_COUNT" -gt 0 ] || [ "$COLLECTION_ID_COUNT" -gt 0 ]; then
+  COLLECTION_ID_FILE="$TMPDIR_EXPORT/collection-ids.txt"
+  : > "$COLLECTION_ID_FILE"
+  if [ "$COLLECTION_ID_COUNT" -gt 0 ]; then
+    for collection_id in "${COLLECTION_IDS[@]}"; do
+      COLLECTION_JSON="$TMPDIR_EXPORT/collection-$collection_id.json"
+      CODE=$(curl --silent --show-error --output "$COLLECTION_JSON" --write-out '%{http_code}' \
+        --connect-timeout 30 --max-time 120 -H "Authorization: Bearer $TOKEN" "$ROMM/api/collections/$collection_id") || fail "Collection-ID $collection_id konnte nicht validiert werden"
+      case "$CODE" in 2??) ;; *) fail "Collection-ID $collection_id ist ungueltig: HTTP $CODE: $(LC_ALL=C cut -c 1-700 "$COLLECTION_JSON")" ;; esac
+      printf '%s\n' "$collection_id" >> "$COLLECTION_ID_FILE"
+    done
+  fi
+  if [ "$COLLECTION_NAME_COUNT" -gt 0 ]; then
+    log "Lade Collections..."
+    COLLECTIONS_JSON="$TMPDIR_EXPORT/collections.json"
+    RESOLVED_COLLECTION_IDS="$TMPDIR_EXPORT/resolved-collection-ids.txt"
+    CODE=$(curl --silent --show-error --output "$COLLECTIONS_JSON" --write-out '%{http_code}' \
+      --connect-timeout 30 --max-time 120 -H "Authorization: Bearer $TOKEN" "$ROMM/api/collections") || fail "Collections konnten nicht geladen werden"
+    case "$CODE" in 2??) ;; *) fail "Collections abrufen fehlgeschlagen: HTTP $CODE: $(LC_ALL=C cut -c 1-700 "$COLLECTIONS_JSON")" ;; esac
+    osascript -l JavaScript "$JS_HELPER" collections "$COLLECTIONS_JSON" "$RESOLVED_COLLECTION_IDS" "${COLLECTION_NAMES[@]}" >/dev/null || fail "Collections konnten nicht aufgeloest werden"
+    LC_ALL=C sed -n 'p' "$RESOLVED_COLLECTION_IDS" >> "$COLLECTION_ID_FILE"
+  fi
+  COLLECTION_ID_FILE_UNIQUE="$TMPDIR_EXPORT/collection-ids-unique.txt"
+  LC_ALL=C awk '!seen[$0]++' "$COLLECTION_ID_FILE" > "$COLLECTION_ID_FILE_UNIQUE"
+  source_number=0
+  while IFS= read -r collection_id; do
+    [ -n "$collection_id" ] || continue
+    source_number=$((source_number + 1))
+    load_source "collection_id=$collection_id" "Collection $collection_id" "$source_number"
+  done < "$COLLECTION_ID_FILE_UNIQUE"
+else
+  log "Lade Favorites..."
+  load_source 'favorite=true' Favorites 0
+fi
+
+# Eine ROM kann in mehreren gewaehlten Collections enthalten sein.
+MANIFEST_UNIQUE="$TMPDIR_EXPORT/manifest-unique.tsv"
+LC_ALL=C awk -F "$(printf '\t')" '!seen[$2]++' "$MANIFEST" > "$MANIFEST_UNIQUE"
+mv "$MANIFEST_UNIQUE" "$MANIFEST"
+offset=$(LC_ALL=C sed -n '$=' "$MANIFEST")
+offset=${offset:-0}
+log "Gefunden: $offset eindeutige Spiele"
 
 if [ "$DOWNLOAD_ROMS" -eq 0 ] && [ "$DOWNLOAD_MEDIA" -eq 0 ]; then
   log "Hinweis: Ohne --download-roms/--download-media werden nur gamelist.xml-Dateien vorbereitet."
