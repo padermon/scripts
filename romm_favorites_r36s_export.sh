@@ -24,7 +24,7 @@ Optionen:
   --password PASS     Passwort; sicherer: ROMM_PASSWORD oder Eingabe-Prompt
   --output PFAD       Zielordner, z.B. ./r36s-export oder /Volumes/EASYROMS
   --download-roms     ROM-Dateien herunterladen
-  --download-media    Bilder und Videos herunterladen
+  --download-media    Alle verfuegbaren RomM-Medien herunterladen
   --dry-run           Nichts ins Ziel schreiben, nur Aktionen anzeigen
   -h, --help          Hilfe anzeigen
 EOF
@@ -171,6 +171,24 @@ function record(r, base) {
   var fs=first(r.fs_name,r.name,'rom-'+r.id);
   var romfile=(r.has_multiple_files && !/\.zip$/i.test(fs)) ? safe(fs)+'.zip' : safe(fs);
   var basename=safe(first(r.fs_name_no_ext,title,'rom-'+r.id));
+  // Prefer RomM-managed resource paths over provider URLs. Provider URLs are
+  // useful fallbacks when an asset has not been cached by RomM yet.
+  var bezel=first(ss.bezel_path,ss.bezel_url);
+  var box2d=first(ss.box2d_path,ss.box2d_url,r.path_cover_small,r.path_cover_large,gl.box2d_url);
+  var box2dBack=first(ss.box2d_back_path,ss.box2d_back_url,gl.box2d_back_url);
+  var box2dSide=first(ss.box2d_side_path,ss.box2d_side_url);
+  var box3d=first(ss.box3d_path,ss.box3d_url,gl.box3d_path,gl.box3d_url);
+  var miximage=first(ss.miximage_path,ss.miximage_url,gl.miximage_path,gl.miximage_url);
+  var miximageV2=first(ss.miximage_v2_path,ss.miximage_v2_url);
+  var physical=first(ss.physical_path,ss.physical_url,gl.physical_path,gl.physical_url);
+  var screenshot=first(r.screenshot_path,ss.screenshot_path,ss.screenshot_url,gl.screenshot_url,gl.image_url);
+  var titleScreen=first(ss.title_screen_path,ss.title_screen_url,gl.title_screen_url);
+  var marquee=first(ss.marquee_path,ss.marquee_url,gl.marquee_path,gl.marquee_url);
+  var logo=first(ss.logo_path,ss.logo_url);
+  var fanart=first(ss.fanart_path,ss.fanart_url,gl.fanart_url);
+  var video=first(ss.video_path,ss.video_url,gl.video_path,gl.video_url,r.path_video);
+  var videoNormalized=first(ss.video_normalized_path,ss.video_normalized_url);
+  var manual=first(r.path_manual,r.url_manual,ss.manual_path,ss.manual_url,gl.manual_url);
   var fields = [
     r.id, systemFolder(r), title, first(r.summary),
     first(meta.genres,ss.genres,igdb.genres,moby.genres,lb.genres),
@@ -179,10 +197,17 @@ function record(r, base) {
     esDate(first(meta.first_release_date,ss.first_release_date,igdb.first_release_date)),
     rating(first(meta.average_rating,ss.ss_score,igdb.total_rating,igdb.aggregated_rating)),
     romfile, basename, fs,
-    resource(base,first(ss.miximage_path,gl.miximage_path,r.path_cover_large,r.path_cover_small)),
-    resource(base,first(r.path_cover_small,r.path_cover_large,ss.box2d_path,ss.box3d_path,gl.box3d_path)),
-    resource(base,first(ss.marquee_path,gl.marquee_path,ss.logo_path)),
-    resource(base,first(r.path_video,ss.video_normalized_path,ss.video_path))
+    resource(base,bezel), resource(base,box2d), resource(base,box2dBack),
+    resource(base,box2dSide), resource(base,box3d), resource(base,miximage),
+    resource(base,miximageV2), resource(base,physical), resource(base,screenshot),
+    resource(base,titleScreen), resource(base,marquee), resource(base,logo),
+    resource(base,fanart), resource(base,video), resource(base,videoNormalized),
+    resource(base,manual),
+    // Elementerial core slots: best available artwork for each theme feature.
+    resource(base,first(miximageV2,miximage,screenshot,r.path_cover_large,box2d,box3d)),
+    resource(base,first(box2d,r.path_cover_small,r.path_cover_large,screenshot)),
+    resource(base,first(marquee,logo)),
+    resource(base,first(videoNormalized,video,r.path_video))
   ];
   return fields.map(b64).join('\t');
 }
@@ -238,10 +263,24 @@ download() {
   mkdir -p "$(dirname "$dest")" || return 1
   if [ -s "$dest" ]; then return 0; fi
   tmp="$dest.part"
-  if curl --fail --location --silent --show-error --connect-timeout 30 --max-time 600 \
-      -H "Authorization: Bearer $TOKEN" -o "$tmp" "$url"; then
-    mv "$tmp" "$dest"; return 0
-  fi
+  case "$url" in
+    "$ROMM"/*)
+      if curl --fail --location --silent --show-error --connect-timeout 30 --max-time 600 \
+          -H "Authorization: Bearer $TOKEN" -o "$tmp" "$url"; then
+        mv "$tmp" "$dest"; return 0
+      fi
+      ;;
+    http://*|https://*)
+      # Never disclose the RomM bearer token to external metadata providers.
+      if curl --fail --location --silent --show-error --connect-timeout 30 --max-time 600 \
+          -o "$tmp" "$url"; then
+        mv "$tmp" "$dest"; return 0
+      fi
+      ;;
+    *)
+      log "WARN: Ungueltige Download-URL: $url"
+      ;;
+  esac
   rm -f "$tmp"; return 1
 }
 
@@ -292,7 +331,7 @@ SKIPPED="$TMPDIR_EXPORT/skipped.tsv"
 : > "$SKIPPED"
 index=0
 
-while IFS="$(printf '\t')" read -r marker f_id f_system f_title f_desc f_genre f_developer f_publisher f_players f_date f_rating f_romfile f_basename f_fsname f_image f_thumb f_marquee f_video; do
+while IFS="$(printf '\t')" read -r marker f_id f_system f_title f_desc f_genre f_developer f_publisher f_players f_date f_rating f_romfile f_basename f_fsname f_bezel f_box2d f_box2d_back f_box2d_side f_box3d f_miximage f_miximage_v2 f_physical f_screenshot f_title_screen f_marquee_source f_logo f_fanart f_video_source f_video_normalized f_manual f_image f_thumb f_marquee f_video; do
   [ "$marker" = ROM ] || continue
   index=$((index + 1))
   id=$(dec "$f_id"); system=$(dec "$f_system"); title=$(dec "$f_title")
@@ -301,6 +340,12 @@ while IFS="$(printf '\t')" read -r marker f_id f_system f_title f_desc f_genre f
   rating=$(dec "$f_rating"); romfile=$(dec "$f_romfile"); basename=$(dec "$f_basename")
   fsname=$(dec "$f_fsname"); image_url=$(dec "$f_image"); thumb_url=$(dec "$f_thumb")
   marquee_url=$(dec "$f_marquee"); video_url=$(dec "$f_video")
+  bezel_url=$(dec "$f_bezel"); box2d_url=$(dec "$f_box2d"); box2d_back_url=$(dec "$f_box2d_back")
+  box2d_side_url=$(dec "$f_box2d_side"); box3d_url=$(dec "$f_box3d"); miximage_url=$(dec "$f_miximage")
+  miximage_v2_url=$(dec "$f_miximage_v2"); physical_url=$(dec "$f_physical"); screenshot_url=$(dec "$f_screenshot")
+  title_screen_url=$(dec "$f_title_screen"); marquee_source_url=$(dec "$f_marquee_source"); logo_url=$(dec "$f_logo")
+  fanart_url=$(dec "$f_fanart"); video_source_url=$(dec "$f_video_source"); video_normalized_url=$(dec "$f_video_normalized")
+  manual_url=$(dec "$f_manual")
   system_dir="$OUTPUT/$system"
   log "[$index/$offset] $system: $title"
 
@@ -314,23 +359,56 @@ while IFS="$(printf '\t')" read -r marker f_id f_system f_title f_desc f_genre f
   fi
 
   local_image=""; local_thumb=""; local_marquee=""; local_video=""
+  local_bezel=""; local_box2d=""; local_box2d_back=""; local_box2d_side=""; local_box3d=""
+  local_miximage=""; local_miximage_v2=""; local_physical=""; local_screenshot=""; local_title_screen=""
+  local_logo=""; local_fanart=""; local_video_source=""; local_video_normalized=""; local_manual=""
   if [ "$DOWNLOAD_MEDIA" -eq 1 ]; then
-    if [ -n "$image_url" ]; then
-      ext=$(ext_from_url "$image_url" .png); dest="$system_dir/media/images/$basename$ext"
-      download "$image_url" "$dest" && local_image="./media/images/$basename$ext" || log "WARN: Bild-Download fehlgeschlagen: $image_url"
-    fi
-    if [ -n "$thumb_url" ]; then
-      ext=$(ext_from_url "$thumb_url" .png); dest="$system_dir/media/images/$basename$ext"
-      download "$thumb_url" "$dest" && local_thumb="./media/images/$basename$ext" || log "WARN: Thumbnail-Download fehlgeschlagen: $thumb_url"
-    fi
-    if [ -n "$marquee_url" ]; then
-      ext=$(ext_from_url "$marquee_url" .png); dest="$system_dir/media/marquees/$basename$ext"
-      download "$marquee_url" "$dest" && local_marquee="./media/marquees/$basename$ext" || log "WARN: Marquee-Download fehlgeschlagen: $marquee_url"
-    fi
-    if [ -n "$video_url" ]; then
-      ext=$(ext_from_url "$video_url" .mp4); dest="$system_dir/media/videos/$basename$ext"
-      download "$video_url" "$dest" && local_video="./media/videos/$basename$ext" || log "WARN: Video-Download fehlgeschlagen: $video_url"
-    fi
+    fetch_media() {
+      media_url=$1; media_dir=$2; media_default_ext=$3; MEDIA_RESULT=""
+      [ -n "$media_url" ] || return 0
+      media_ext=$(ext_from_url "$media_url" "$media_default_ext")
+      media_dest="$system_dir/media/$media_dir/$basename$media_ext"
+      if download "$media_url" "$media_dest"; then
+        MEDIA_RESULT="./media/$media_dir/$basename$media_ext"
+      else
+        log "WARN: Medien-Download fehlgeschlagen ($media_dir): $media_url"
+      fi
+    }
+
+    fetch_media "$bezel_url" bezels .png; local_bezel=$MEDIA_RESULT
+    fetch_media "$box2d_url" box2d .png; local_box2d=$MEDIA_RESULT
+    fetch_media "$box2d_back_url" box2d-back .png; local_box2d_back=$MEDIA_RESULT
+    fetch_media "$box2d_side_url" box2d-side .png; local_box2d_side=$MEDIA_RESULT
+    fetch_media "$box3d_url" box3d .png; local_box3d=$MEDIA_RESULT
+    fetch_media "$miximage_url" miximages .png; local_miximage=$MEDIA_RESULT
+    fetch_media "$miximage_v2_url" miximages-v2 .png; local_miximage_v2=$MEDIA_RESULT
+    fetch_media "$physical_url" physical .png; local_physical=$MEDIA_RESULT
+    fetch_media "$screenshot_url" screenshots .png; local_screenshot=$MEDIA_RESULT
+    fetch_media "$title_screen_url" title-screens .png; local_title_screen=$MEDIA_RESULT
+    fetch_media "$marquee_source_url" marquees .png; local_marquee=$MEDIA_RESULT
+    fetch_media "$logo_url" logos .png; local_logo=$MEDIA_RESULT
+    fetch_media "$fanart_url" fanart .png; local_fanart=$MEDIA_RESULT
+    fetch_media "$video_source_url" videos .mp4; local_video_source=$MEDIA_RESULT
+    fetch_media "$video_normalized_url" videos-normalized .mp4; local_video_normalized=$MEDIA_RESULT
+    fetch_media "$manual_url" manuals .pdf; local_manual=$MEDIA_RESULT
+
+    # Download the selected Elementerial assets only when their source was not
+    # already exported to the exact core slot.
+    case "$image_url" in
+      "$miximage_v2_url") local_image=$local_miximage_v2 ;;
+      "$miximage_url") local_image=$local_miximage ;;
+      "$screenshot_url") local_image=$local_screenshot ;;
+      "$box2d_url") local_image=$local_box2d ;;
+      "$box3d_url") local_image=$local_box3d ;;
+      *) fetch_media "$image_url" images .png; local_image=$MEDIA_RESULT ;;
+    esac
+    case "$thumb_url" in
+      "$box2d_url") local_thumb=$local_box2d ;;
+      "$screenshot_url") local_thumb=$local_screenshot ;;
+      *) fetch_media "$thumb_url" thumbnails .png; local_thumb=$MEDIA_RESULT ;;
+    esac
+    [ -n "$local_marquee" ] || local_marquee=$local_logo
+    [ -n "$local_video_normalized" ] && local_video=$local_video_normalized || local_video=$local_video_source
   fi
   [ -n "$local_thumb" ] || local_thumb=$local_image
 
@@ -344,13 +422,24 @@ while IFS="$(printf '\t')" read -r marker f_id f_system f_title f_desc f_genre f
     xml_field thumbnail "$local_thumb"
     xml_field marquee "$local_marquee"
     xml_field video "$local_video"
+    # Extended media fields are ignored safely by older EmulationStation
+    # builds, while compatible forks and tools can use them directly.
+    xml_field fanart "$local_fanart"
+    xml_field manual "$local_manual"
+    xml_field boxart "$local_box2d"
+    xml_field boxback "$local_box2d_back"
+    xml_field cartridge "$local_physical"
+    xml_field screenshot "$local_screenshot"
+    xml_field titleshot "$local_title_screen"
+    xml_field wheel "$local_marquee"
+    xml_field mix "${local_miximage_v2:-$local_miximage}"
+    xml_field bezel "$local_bezel"
     xml_field rating "$rating"
     xml_field releasedate "$releasedate"
     xml_field developer "$developer"
     xml_field publisher "$publisher"
     xml_field genre "$genre"
     xml_field players "$players"
-    xml_field favorite true
     printf '  </game>\n'
   } >> "$gamefile"
   count_file="$COUNTDIR/$system"

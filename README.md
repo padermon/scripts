@@ -8,8 +8,9 @@ The script creates a `gamelist.xml` for each system and can optionally download 
 
 - Exports only games marked as favorites in RomM
 - Maps common RomM platform slugs to ArkOS system directories
-- Downloads ROM files and available media
+- Downloads ROM files and all available RomM media
 - Creates EmulationStation-compatible `gamelist.xml` files
+- Optimizes the four core media slots for the Elementerial ArkOS theme
 - Supports paginated RomM libraries
 - Skips files that have already been downloaded
 - Does not write credentials or export reports to the output directory
@@ -97,13 +98,70 @@ r36s-export/
     Game.gba
     gamelist.xml
     media/
-      images/
-        Game.png
+      bezels/
+      box2d/
+      box2d-back/
+      box2d-side/
+      box3d/
+      fanart/
+      logos/
       marquees/
-        Game.png
+      manuals/
+      miximages/
+      miximages-v2/
+      physical/
+      screenshots/
+      title-screens/
       videos/
-        Game.mp4
+      videos-normalized/
 ```
+
+Only media types available for a game are written. File extensions are retained
+from the source URL where possible.
+
+## Elementerial media mapping
+
+The script is optimized for
+[Elementerial for ArkOS](https://github.com/giovaboy/es-theme-elementerial-arkos).
+That theme directly uses four EmulationStation media fields in its Detailed,
+Grid, Boxes, Video, and Elementflix views:
+
+| Gamelist field | Elementerial usage | Selection priority |
+| --- | --- | --- |
+| `image` | Detailed view, Boxes view, Grid screenshot | `miximage_v2`, `miximage`, screenshot, large cover, `box2d`, `box3d` |
+| `thumbnail` | Elementflix, Grid thumbnail | `box2d`, small cover, large cover, screenshot |
+| `marquee` | Game logo and video snapshot | marquee, logo |
+| `video` | Video view and Elementflix | `video_normalized`, video |
+
+The selected core files reference the corresponding files in the full media
+export, avoiding unnecessary duplicate downloads where possible.
+
+For compatibility with other EmulationStation forks and library tools, the
+generated gamelist also includes available extended fields such as `fanart`,
+`manual`, `boxart`, `boxback`, `cartridge`, `screenshot`, `titleshot`, `wheel`,
+`mix`, and `bezel`. ArkOS versions that do not use an extended field safely
+ignore it.
+
+## Supported RomM media
+
+The exporter recognizes the following RomM media types:
+
+- bezel
+- box2d
+- box2d back
+- box2d side
+- box3d
+- miximage
+- miximage v2
+- physical media
+- screenshot
+- title screen
+- marquee
+- logo
+- fanart
+- video
+- normalized video
+- manual
 
 Depending on the metadata available in RomM, each `gamelist.xml` entry can contain:
 
@@ -116,7 +174,10 @@ Depending on the metadata available in RomM, each `gamelist.xml` entry can conta
 - Release date
 - Developer and publisher
 - Genre and player count
-- Favorite status
+
+The RomM favorite flag is used only to select which games are exported. The
+exporter deliberately does not write `<favorite>true</favorite>` to the target
+`gamelist.xml`, so favorites can be managed independently on the handheld.
 
 ## Options
 
@@ -126,7 +187,7 @@ Depending on the metadata available in RomM, each `gamelist.xml` entry can conta
 --password PASS     Password; use the prompt or ROMM_PASSWORD instead when possible
 --output PATH       Output directory, required
 --download-roms     Download ROM files
---download-media    Download images and videos
+--download-media    Download all available RomM media
 --dry-run           Show planned actions without writing to the output directory
 -h, --help          Show help
 ```
