@@ -252,7 +252,12 @@ ext_from_url() {
   local u path name ext default_ext
   u=$1; default_ext=$2; path=${u%%\?*}; name=${path##*/}
   case "$name" in
-    *.*) ext=.${name##*.}; case "$ext" in .????????*|.*[!A-Za-z0-9]*) ext=$default_ext ;; esac ;;
+    *.*)
+      ext=.${name##*.}
+      case "$ext" in
+        .php|.cgi|.asp|.aspx|.jsp|.do|.action|.????????*|.*[!A-Za-z0-9]*) ext=$default_ext ;;
+      esac
+      ;;
     *) ext=$default_ext ;;
   esac
   printf '%s' "$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
